@@ -94,9 +94,38 @@ int object_exists(const ObjectID *id) {
 //
 // Returns 0 on success, -1 on error.
 int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
-    // TODO: Implement
-    (void)type; (void)data; (void)len; (void)id_out;
-    return -1;
+    const char *type_str;
+    switch (type) {
+        case OBJ_BLOB:   type_str = "blob"; break;
+        case OBJ_TREE:   type_str = "tree"; break;
+        case OBJ_COMMIT: type_str = "commit"; break;
+        default:         return -1; 
+    }
+
+    char header[64]; // Max buffer needed for type + max size_t + \0
+    int header_len = snprintf(header, sizeof(header), "%s %zu", type_str, len);
+    if (header_len < 0 || header_len >= sizeof(header)) return -1;
+    
+    // snprintf return value excludes the \0, so we explicitly add 1
+    size_t full_size = header_len + 1 + len;
+
+    uint8_t *full_object = malloc(full_size);
+    if (!full_object) return -1;
+
+    // Place header and \0 at the start of the buffer
+    memcpy(full_object, header, header_len + 1);
+    
+    // Place payload immediately after the \0
+    if (len > 0) {
+        memcpy(full_object + header_len + 1, data, len);
+    }
+
+    // Hash the entire contiguous block (header + \0 + payload)
+    compute_hash(full_object, full_size, id_out);
+
+    // Temp cleanup and return until filesystem operations are added
+    free(full_object); 
+    return -1; 
 }
 
 // Read an object from the store.
