@@ -129,9 +129,38 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 //   - object_write    : save that binary buffer to the store as OBJ_TREE
 //
 // Returns 0 on success, -1 on error.
+// Recursive helper function signature
+static int write_tree_level(const IndexEntry *entries, int count, int path_offset, ObjectID *out_id);
+
 int tree_from_index(ObjectID *id_out) {
-    // TODO: Implement recursive tree building
-    // (See Lab Appendix for logical steps)
-    (void)id_out;
+    Index idx;
+    // Load the current staging area
+    if (index_load(&idx) < 0) {
+        return -1;
+    }
+
+    if (idx.count == 0) {
+        // Edge case: Empty repository
+        // (We would normally create an empty tree here, but let's 
+        // rely on the recursive function to handle zero entries)
+    }
+
+    // Kick off the recursion starting at character offset 0
+    return write_tree_level(idx.entries, idx.count, 0, id_out);
+}
+
+static int write_tree_level(const IndexEntry *entries, int count, int path_offset, ObjectID *out_id) {
+    Tree current_tree;
+    current_tree.count = 0;
+
+    int i = 0;
+    while (i < count && current_tree.count < MAX_TREE_ENTRIES) {
+        // TODO: Logic to detect if entries[i] is a file or a directory
+        // TODO: Recursive grouping logic
+        
+        i++; // Temporary infinite loop prevention
+    }
+
+    // TODO: Serialize and write current_tree to object store
     return -1;
 }
