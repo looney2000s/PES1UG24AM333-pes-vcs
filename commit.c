@@ -194,8 +194,52 @@ int head_update(const ObjectID *new_commit) {
 //
 // Returns 0 on success, -1 on error.
 int commit_create(const char *message, ObjectID *commit_id_out) {
-    // TODO: Implement commit creation
-    // (See Lab Appendix for logical steps)
-    (void)message; (void)commit_id_out;
-    return -1;
+    Commit new_commit;
+    // Zero out the struct memory to prevent garbage data
+    memset(&new_commit, 0, sizeof(Commit));
+
+    // 1. Snapshot the staging area: Build a Tree from the Index
+    if (tree_from_index(&new_commit.tree) < 0) {
+        fprintf(stderr, "ERROR: Failed to build tree from index. Is the index empty?\n");
+        return -1;
+    }
+
+    // 2. Track History: Read the current HEAD to find our parent commit
+    // If head_read fails, it means this is the very first commit in the repository.
+    if (head_read(&new_commit.parent) == 0) {
+        new_commit.has_parent = 1;
+    } else {
+        new_commit.has_parent = 0; 
+    }
+
+    // 3. Compile Metadata: Author, Timestamp, and Message
+    snprintf(new_commit.author, sizeof(new_commit.author), "%s", pes_author());
+    new_commit.timestamp = (uint64_t)time(NULL);
+    snprintf(new_commit.message, sizeof(new_commit.message), "%s", message);
+
+    // 4. Serialize the struct into the Git text format
+    void *data;
+    size_t len;
+    if (commit_serialize(&new_commit, &data, &len) < 0) {
+        fprintf(stderr, "ERROR: Failed to serialize commit object.\n");
+        return -1;
+    }
+
+    // 5. Write the serialized commit to the content-addressable store
+    if (object_write(OBJ_COMMIT, data, len, commit_id_out) < 0) {
+        free(data);
+        fprintf(stderr, "ERROR: Failed to write commit to object store.\n");
+        return -1;
+    }
+    
+    // Free the heap-allocated serialization buffer
+    free(data);
+
+    // 6. Atomically move the branch pointer forward to this new commit
+    if (head_update(commit_id_out) < 0) {
+        fprintf(stderr, "ERROR: Failed to update HEAD pointer.\n");
+        return -1;
+    }
+
+    return 0;
 }
