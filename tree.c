@@ -130,7 +130,80 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 //
 // Returns 0 on success, -1 on error.
 // Recursive helper function signature
-static int write_tree_level(const IndexEntry *entries, int count, int path_offset, ObjectID *out_id);
+static int write_tree_level(const IndexEntry *entries, int count, int path_offset, ObjectID *out_id) {
+    Tree current_tree;
+    current_tree.count = 0;
+
+    int i = 0;
+    while (i < count && current_tree.count < MAX_TREE_ENTRIES) {
+        // Look at the path from our current directory depth
+        const char *local_path = entries[i].path + path_offset;
+        const char *slash = strchr(local_path, '/');
+
+        if (!slash) {
+            // BASE CASE: No slash means it's a file in the current directory.
+            TreeEntry *te = &current_tree.entries[current_tree.count++];
+            te->mode = entries[i].mode;
+            
+            // strncpy is safer, but we know the limits from the struct
+            strncpy(te->name, local_path, sizeof(te->name) - 1);
+            te->name[sizeof(te->name) - 1] = '\0';
+            
+            te->hash = entries[i].hash;
+            i++; 
+        } else {
+            // RECURSIVE CASE: It's a subdirectory.
+            size_t dir_len = slash - local_path;
+            char dir_name[256];
+            strncpy(dir_name, local_path, dir_len);
+            dir_name[dir_len] = '\0';
+
+            // Scan ahead to find all files belonging to this subdirectory
+            int j = i + 1;
+            while (j < count) {
+                const char *next_local = entries[j].path + path_offset;
+                // Check if the next path starts with "dir_name/"
+                if (strncmp(next_local, dir_name, dir_len) == 0 && next_local[dir_len] == '/') {
+                    j++; // It belongs to this directory, keep scanning
+                } else {
+                    break; // We've hit a file in a different directory
+                }
+            }
+
+            // Recursively build the subtree for this chunk of files
+            ObjectID sub_tree_id;
+            int sub_count = j - i;
+            // Advance path_offset past "dir_name/" (+1 for the slash)
+            write_tree_level(&entries[i], sub_count, path_offset + dir_len + 1, &sub_tree_id);
+
+            // Add the newly created directory tree to our current tree
+            TreeEntry *te = &current_tree.entries[current_tree.count++];
+            te->mode = MODE_DIR; // 0040000
+            strncpy(te->name, dir_name, sizeof(te->name) - 1);
+            te->name[sizeof(te->name) - 1] = '\0';
+            te->hash = sub_tree_id;
+
+            // Jump 'i' forward past all the files we just processed
+            i = j;
+        }
+    }
+
+    // Serialize the fully constructed tree into a binary format
+    void *tree_data;
+    size_t tree_len;
+    if (tree_serialize(&current_tree, &tree_data, &tree_len) < 0) {
+        return -1;
+    }
+
+    // Write the binary tree object to the .pes/objects/ store
+    if (object_write(OBJ_TREE, tree_data, tree_len, out_id) < 0) {
+        free(tree_data);
+        return -1;
+    }
+
+    free(tree_data);
+    return 0;
+}
 
 int tree_from_index(ObjectID *id_out) {
     Index idx;
