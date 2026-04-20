@@ -123,9 +123,63 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
     // Hash the entire contiguous block (header + \0 + payload)
     compute_hash(full_object, full_size, id_out);
 
-    // Temp cleanup and return until filesystem operations are added
-    free(full_object); 
-    return -1; 
+    // 3. Deduplication: Check if this object already exists
+    if (object_exists(id_out)) {
+        free(full_object);
+        return 0; // Success! We don't need to write it again.
+    }
+
+    // 4. Create the shard directory (e.g., .pes/objects/XX/)
+    char dir_path[512];
+    char hex_hash[HASH_HEX_SIZE + 1];
+    hash_to_hex(id_out, hex_hash);
+    
+    // Construct the directory path using the first 2 characters
+    snprintf(dir_path, sizeof(dir_path), "%s/%.2s", OBJECTS_DIR, hex_hash);
+    
+    // mkdir returns -1 if it exists, which is fine, we just ignore the error
+    mkdir(dir_path, 0755); 
+
+    // 5. Setup file paths for the atomic write
+    char final_path[512];
+    object_path(id_out, final_path, sizeof(final_path));
+    
+    char temp_path[512];
+    // Create a unique temp file in the same directory
+    snprintf(temp_path, sizeof(temp_path), "%s/tmp_%d", dir_path, getpid());
+
+    // 6. Write to the temporary file
+    int fd = open(temp_path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) {
+        free(full_object);
+        return -1;
+    }
+
+    if (write(fd, full_object, full_size) != (ssize_t)full_size) {
+        close(fd);
+        free(full_object);
+        return -1;
+    }
+
+    // Ensure data is pushed to the physical disk platter
+    fsync(fd);
+    close(fd);
+
+    // 7. Atomically rename the temp file to the final hash name
+    if (rename(temp_path, final_path) < 0) {
+        free(full_object);
+        return -1;
+    }
+
+    // 8. Fsync the directory to persist the directory entry update
+    int dir_fd = open(dir_path, O_RDONLY);
+    if (dir_fd >= 0) {
+        fsync(dir_fd);
+        close(dir_fd);
+    }
+
+    free(full_object);
+    return 0;
 }
 
 // Read an object from the store.
