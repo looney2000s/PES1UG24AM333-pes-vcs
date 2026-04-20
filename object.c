@@ -205,7 +205,61 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
 // The caller is responsible for calling free(*data_out).
 // Returns 0 on success, -1 on error (file not found, corrupt, etc.).
 int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_t *len_out) {
-    // TODO: Implement
-    (void)id; (void)type_out; (void)data_out; (void)len_out;
-    return -1;
+    // 1. Build the file path from the hash
+    char path[512];
+    object_path(id, path, sizeof(path));
+
+    // 2. Open the file
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    // Get the exact file size
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (file_size < 0) { fclose(f); return -1; }
+
+    // Read the entire file into a contiguous memory buffer
+    uint8_t *buffer = malloc(file_size);
+    if (!buffer) { fclose(f); return -1; }
+
+    if (fread(buffer, 1, file_size, f) != (size_t)file_size) {
+        free(buffer); fclose(f); return -1;
+    }
+    fclose(f);
+
+    // 3. Verify Integrity: Recompute hash and compare
+    ObjectID computed_id;
+    compute_hash(buffer, file_size, &computed_id);
+    if (memcmp(id->hash, computed_id.hash, HASH_SIZE) != 0) {
+        free(buffer); 
+        return -1; // Hash mismatch! The file is corrupted.
+    }
+
+    // 4. Parse the header (find the \0 boundary)
+    char *null_pos = memchr(buffer, '\0', file_size);
+    if (!null_pos) { free(buffer); return -1; }
+
+    char type_str[32];
+    size_t parsed_size;
+    // Extract the type string and size integer from the header
+    if (sscanf((char *)buffer, "%31s %zu", type_str, &parsed_size) != 2) {
+        free(buffer); return -1;
+    }
+
+    // 5. Map the string back to the ObjectType enum
+    if (strcmp(type_str, "blob") == 0) *type_out = OBJ_BLOB;
+    else if (strcmp(type_str, "tree") == 0) *type_out = OBJ_TREE;
+    else if (strcmp(type_str, "commit") == 0) *type_out = OBJ_COMMIT;
+    else { free(buffer); return -1; }
+
+    // 6. Allocate memory for the payload and copy it over
+    *len_out = parsed_size;
+    *data_out = malloc(parsed_size);
+    if (!*data_out) { free(buffer); return -1; }
+
+    memcpy(*data_out, null_pos + 1, parsed_size);
+
+    free(buffer); // Free the full file buffer, keep the payload buffer
+    return 0;
 }
